@@ -13,12 +13,12 @@ from discord.ui import Button, View
 print('hello dodik')
 
 
-intents = discord.Intents.all()
+# intents = discord.Intents.all()
 # intents.typing = True
 # intents.presences = True
 
 
-bot = commands.Bot(intents=intents, command_prefix='$')
+bot = commands.Bot(command_prefix='$')
 
 class MapCheck:
     def __init__(self, map, channel, active):
