@@ -1,3 +1,4 @@
+import datetime
 from urllib import response
 import discord
 import os
@@ -16,12 +17,14 @@ intents = discord.Intents.all()
 # intents.typing = True
 # intents.presences = True
 
-bot = commands.AutoShardedBot(intents=intents, command_prefix='$')
+
+bot = commands.Bot(intents=intents, command_prefix='$')
 
 class MapCheck:
-    def __init__(self, map, channel):
+    def __init__(self, map, channel, active):
         self.map = map
         self.channel = channel
+        self.active = active
 
 
 class PlayersChecker:
@@ -35,78 +38,111 @@ async def on_ready():
     print('Bot is ready')
 
 
-
-@bot.command(name='asd')
-async def asd(ctx):
-    async def button_callback(interaction):
-        embed = discord.Embed(title='ArkGame66Players', color=discord.Color.green())
-        resp = requests.get('https://arkgame66.ru/servers_status').json()
-        print(resp['servers'])
-        servers_value = ''
-        players_value = ''
-
-        for i in resp['servers']:
-            circle = ':green_circle:' if i['status'] else ':red_circle'
-            servers_value += f'{circle} [{i["id"]}] **{i["name"]}** __{i["players"]}/{i["maxplayers"]}__\n'
-
-        for i in resp['players']:
-            players_value += f'{i["name"]} {i["server"]}\n'
-        embed.add_field(name='Servers', value=servers_value, inline=False)
-        embed.add_field(name=f'Players {len(resp["players"])}', value=f"```{players_value}```")
-        print(resp['servers'])
-        await interaction.response.edit_message(embed=embed)
-
-    button = Button(custom_id='button1', label='WOW button!', style=discord.ButtonStyle.green)
-    view = View()
-    view.add_item(button)
-    button.callback = button_callback
-    players_message = await ctx.channel.send(view=view)
-    players_checker_message = PlayersChecker(players_message.id)
+# @bot.event
+# async def on_message(message):
+#     print(message.content)
+#     print(message)
 
 
-# async def edit_message(ctx, embed):
-    
-#     resp = requests.get('https://arkgame66.ru/servers_status').json()
-#     print(resp['servers'])
-#     servers_value = ''
-#     players_value = ''
+@bot.command(name='monitor', description='Create monitoring message')
+async def monitor(ctx):
+    message = await ctx.channel.send(embed=await create_embed())
+    while True:
+        await asyncio.sleep(5)
+        await message.edit(embed=await create_embed())
 
-#     for i in resp['servers']:
-#         circle = ':green_circle:' if i['status'] else ':red_circle'
-#         servers_value += f'{circle} [{i["id"]}] **{i["name"]}** __{i["players"]}/{i["maxplayers"]}__\n'
+    # button = Button(custom_id='button1', label='Update', style=discord.ButtonStyle.green)
+    # view = View()
+    # view.add_item(button)
+    #
+    # players_message = await ctx.channel.send(view=view)
+    # players_checker_message = PlayersChecker(players_message.id)
+    # button.callback = button_callback
+    # print(players_checker_message.message)
 
-#     for i in resp['players']:
-#         players_value += f'{i["name"]} {i["server"]}\n'
-#     embed.add_field(name='Servers', value=servers_value, inline=False)
-#     embed.add_field(name=f'Players {len(resp["players"])}', value=f"```{players_value}```")
-#     return embed
+
+async def create_embed():
+    embed = discord.Embed(title='ArkGame66Info', color=discord.Color.green())
+    resp = await get_server_info()
+    servers_value = ''
+    map = 'MAP              '
+    player = 'PLAYER                    '
+    players_value = map + player + '\n'
+
+    for i in resp['servers']:
+        circle = ':green_circle:' if i['status'] else ':red_circle'
+        servers_value += f'{circle} [{i["id"]}] **{i["name"]}** __{i["players"]}/{i["maxplayers"]}__\n'
+
+    for i in resp['players']:
+        map_name = i['server'][:len(map)] if len(i['server']) > len(map) else (i['server'] + ' '*(len(map)-len(i['server'])))
+        # print(map_name)
+        player_name = f"{i['name']} ({i['tribe']})"
+        players_value += (map_name + (player_name[:len(player)] if len(player_name) > len(player) else player_name) + '\n')
+    embed.add_field(name='Servers', value=servers_value, inline=False)
+    embed.add_field(name=f'Players {len(resp["players"])}', value=f"```{players_value}```", inline=True)
+    embed.set_footer(text=f"Last update: {datetime.datetime.now().strftime('%H:%M:%S')}")
+    return embed
 
 
-@bot.command(name='check')
+maps_for_check = []
+@bot.command(name='check', description='Check enemy on the map')
 async def check_map(ctx, *args):
-    map = ' '.join(args)
-    mapcheck = MapCheck(map, ctx.channel.id)
-    bot.loop.create_task(enemy_check(ctx, mapcheck))
+    map = args[0] if len(args) <= 2 else f'{args[0]} {args[1]}'
+    mapcheck = MapCheck(map, ctx.channel.id, True)
+    maps_for_check.append(mapcheck)
+    try:
+        enemy_for_check = int(ctx.message.content[-1])
+    except:
+        enemy_for_check = 3
+    enemy = []
+    channel = bot.get_channel(mapcheck.channel)
+    while mapcheck.active:
+        resp = requests.get('https://arkgame66.ru/servers_status').json()
+        for i in resp['players']:
+            if i['tribe'] != 'DRF' and i['server'] == mapcheck.map:
+                enemy.append(f'{i["name"]} ({i["tribe"]})')
+        if len(enemy) >= enemy_for_check:
+            embed = discord.Embed(title='ArkGame66Info', color=discord.Color.red())
+            message = ''
+            for i in enemy:
+                message += f'{i}\n'
+            embed.add_field(name=f'Enemies ({len(enemy)})', value=message)
+            await channel.send(embed=embed, content='')
+        enemy.clear()
+        await asyncio.sleep(60)
+
+
+@bot.command(name='stop', description='Stop checking enemy on the map')
+async def stop_check(ctx):
+    for i in maps_for_check:
+        if i.channel == ctx.channel.id:
+            i.active = False
+
+
+async def get_server_info():
+    return requests.get('https://arkgame66.ru/servers_status').json()
 
 
 async def enemy_check(ctx, mapcheck):
-    print('abobboboboobboba')
-    while True:
-        enemies = ''
+    print(f'Map: {mapcheck.map}\nChannel: {mapcheck.channel}')
+    enemy = []
+    channel = bot.get_channel(mapcheck.channel)
+    print(int(ctx.message.content[-1]) or 3)
+    print(int(ctx.message.content[-1]))
+    while mapcheck.active:
         resp = requests.get('https://arkgame66.ru/servers_status').json()
-        # print(resp['players'])
         for i in resp['players']:
-            try:
-                asd = i['name'].split(' (')[1][:-1]
-            except:
-                asd = ''
-            print(mapcheck.map.strip() + '   |||   ' + i['server'])
-            if asd == 'Hustler' or asd == 'How to not Solo' and i['server'] == mapcheck.map.strip():
-                print(i)
-                enemies += f'Enemy {i["name"]} on the map {i["server"]}\n'
-        channel = bot.get_channel(mapcheck.channel)
-        await channel.send(enemies)
-        del enemies      
+            if i['tribe'] != 'DRF' and i['server'] == mapcheck.map:
+                enemy.append(f'{i["name"]} ({i["tribe"]})')
+        if len(enemy) >= (int(ctx.message.content[-1]) or 3):
+            embed = discord.Embed(title='ArkGame66Info', color=discord.Color.red())
+            message = ''
+            for i in enemy:
+                message += f'{i}\n'
+
+            embed.add_field(name=f'Enemies ({len(enemy)})', value=message)
+            await channel.send(embed=embed, content='')
+            enemy.clear()
         await asyncio.sleep(10)
 
 
@@ -114,5 +150,5 @@ async def enemy_check(ctx, mapcheck):
 # token = os.environ['TOKEN']
 
 if __name__ == '__main__':
-    token = 'MTAxNzE0OTcwODAwMDU1OTExNA.GFQsWC.pmSjrluhY5brWNfpWNXsrhRrxKCbCk0cIhH498'
+    token = os.environ['TOKEN']
     bot.run(token)
